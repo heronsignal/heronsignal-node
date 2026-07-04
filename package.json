@@ -1,0 +1,34 @@
+{
+  "name": "@heronsignal/node",
+  "version": "0.1.0",
+  "description": "HeronSignal server-side SDK for Node.js — capture backend errors, logs, and business events, correlated to real user sessions.",
+  "keywords": [
+    "heronsignal",
+    "monitoring",
+    "observability",
+    "errors",
+    "logging",
+    "business-events",
+    "funnels"
+  ],
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}
