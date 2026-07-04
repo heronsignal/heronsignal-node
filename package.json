@@ -1,6 +1,6 @@
 {
   "name": "@heronsignal/node",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "HeronSignal server-side SDK for Node.js — capture backend errors, logs, and business events, correlated to real user sessions.",
   "keywords": [
     "heronsignal",
