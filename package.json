@@ -12,12 +12,24 @@
     "funnels"
   ],
   "license": "MIT",
+  "homepage": "https://github.com/heronsignal/heronsignal-node#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heronsignal/heronsignal-node.git"
+  },
+  "bugs": {
+    "url": "https://github.com/heronsignal/heronsignal-node/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "commonjs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"
