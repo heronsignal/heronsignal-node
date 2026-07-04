@@ -21,7 +21,7 @@ npm install @heronsignal/node
 
 ## Quick start
 
-Create a **server ingest token** in the dashboard (Developer → Tokens), then:
+Create a **server ingest token** in the dashboard (Developer → Server SDK), then:
 
 ```ts
 import { init, event, log, captureError } from "@heronsignal/node";
