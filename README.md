@@ -88,6 +88,38 @@ The whole point is tying backend telemetry to the visitor. Attach any of:
 | `sessionId` | The browser session id (only valid while the session is live). |
 | `trace` | `{ traceId, spanId }` for operation-level correlation. |
 
+## Example: a payment journey
+
+The funnel **starts in the browser** (`@heronsignal/web`):
+
+```ts
+heronsignal.event("checkout_started", { plan: "pro" });
+```
+
+Forward the HeronSignal **session id** (and your user id) to the backend on the
+checkout request — e.g. an `x-hs-session` header — then reuse one correlation
+object so the server events line up with that exact visit and **complete the
+funnel**, and any error is tied to the session that hit it:
+
+```ts
+async function handlePayment({ userId, sessionId, orderId, amountCents }) {
+  const who = { userId, sessionId, entity: { type: "order", id: orderId } };
+
+  event("payment_attempted", { amountCents }, who);
+  try {
+    await chargeCard();
+    event("order_paid", { amountCents }, who); // completes the browser funnel
+  } catch (err) {
+    captureError(err, { orderId, step: "charge" }, who); // error, on the session
+    event("payment_failed", { reason: String(err) }, who);
+    throw err;
+  }
+}
+```
+
+Full runnable versions: [`examples/payment-journey.ts`](./examples/payment-journey.ts)
+and an Express route in [`examples/express-checkout.ts`](./examples/express-checkout.ts).
+
 ## Configuration
 
 ```ts
