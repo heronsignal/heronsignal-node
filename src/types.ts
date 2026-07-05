@@ -54,6 +54,13 @@ export interface HeronSignalConfig {
   maxBatchSize?: number;
   /** Drop the oldest events past this queue size. Default 1000. */
   maxQueueSize?: number;
+  /**
+   * How many times a batch is retried after a transient failure (network
+   * error, 429, or 5xx) before its events are dropped. Default 2.
+   */
+  maxRetries?: number;
+  /** Base delay for exponential retry backoff, in ms. Default 1000. */
+  retryBackoffMs?: number;
   /** Disable client-side scrubbing of sensitive attribute keys. Default false. */
   disableScrubbing?: boolean;
   /** Log SDK diagnostics to console. Default false. */

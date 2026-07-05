@@ -132,11 +132,29 @@ init({
   flushIntervalMs: 2000,     // batch flush cadence
   maxBatchSize: 50,          // flush early at this many queued (hard cap 100)
   maxQueueSize: 1000,        // drop oldest beyond this (never OOMs your app)
+  maxRetries: 2,             // retries per batch for network / 429 / 5xx failures
+  retryBackoffMs: 1000,      // base delay for exponential retry backoff
   disableScrubbing: false,   // client-side redaction of sensitive keys
   debug: false,
   onError: (err) => {},      // called if a batch fails to send
 });
 ```
+
+## Security & delivery behavior
+
+- `endpoint` must be an `https://` URL (`http://` is accepted for `localhost`
+  only); anything else throws at `init()`.
+- Attribute values under sensitive-looking keys (`password`, `token`,
+  `authorization`, `apiKey`, `cookie`, `client_secret`, `otp`, …) are replaced
+  with `"[redacted]"` before events leave the process. The same rules apply in
+  `@heronsignal/web` and the mobile SDKs.
+- Event names are capped at 256 chars, log/error messages at 4 KB, and stack
+  traces at 16 KB, so an oversized message can never bloat a batch.
+- Transient failures (network errors, `429`, `5xx`) are retried up to
+  `maxRetries` times with exponential backoff; other `4xx` responses drop the
+  batch immediately so a rejected payload can never become a retry loop.
+- `flush()` calls made while another flush is in flight await the same drain,
+  so `shutdown()` never resolves while events are still queued.
 
 ## Graceful shutdown
 
