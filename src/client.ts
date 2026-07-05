@@ -11,11 +11,23 @@ import type {
 const DEFAULT_ENDPOINT = "https://api.heronsignal.com";
 const HARD_BATCH_CAP = 100;
 const SEND_TIMEOUT_MS = 10_000;
+const MAX_NAME_LENGTH = 256;
+const MAX_MESSAGE_LENGTH = 4_096;
+const MAX_STACK_LENGTH = 16_384;
+const MAX_BACKOFF_MS = 30_000;
+
+interface QueuedEvent {
+  wire: WireEvent;
+  attempts: number;
+}
+
+type SendOutcome = "ok" | "retry" | "drop";
 
 /**
  * A HeronSignal server-side client. Queues events and flushes them in batches
  * to POST {endpoint}/server-events. Instrumentation never throws into your app:
- * transport failures are reported via `onError` and dropped.
+ * transport failures are reported via `onError`, retried with backoff for
+ * transient errors (network, 429, 5xx), and dropped otherwise.
  */
 export class HeronSignalClient {
   private readonly token: string;
@@ -25,14 +37,18 @@ export class HeronSignalClient {
   private readonly release?: string;
   private readonly maxBatchSize: number;
   private readonly maxQueueSize: number;
+  private readonly maxRetries: number;
+  private readonly retryBackoffMs: number;
   private readonly scrub: boolean;
   private readonly debug: boolean;
   private readonly onError?: (error: unknown) => void;
   private readonly doFetch: FetchLike;
 
-  private queue: WireEvent[] = [];
+  private queue: QueuedEvent[] = [];
   private timer: ReturnType<typeof setInterval> | undefined;
-  private flushing = false;
+  private inFlight: Promise<void> | null = null;
+  private consecutiveFailures = 0;
+  private backoffUntil = 0;
   private closed = false;
 
   constructor(config: HeronSignalConfig) {
@@ -41,6 +57,8 @@ export class HeronSignalClient {
     }
 
     const base = (config.endpoint ?? DEFAULT_ENDPOINT).replace(/\/+$/, "");
+    assertSafeEndpoint(base);
+
     this.token = config.token;
     this.url = `${base}/server-events`;
     this.service = config.service;
@@ -48,6 +66,8 @@ export class HeronSignalClient {
     this.release = config.release;
     this.maxBatchSize = Math.min(config.maxBatchSize ?? 50, HARD_BATCH_CAP);
     this.maxQueueSize = config.maxQueueSize ?? 1000;
+    this.maxRetries = config.maxRetries ?? 2;
+    this.retryBackoffMs = config.retryBackoffMs ?? 1000;
     this.scrub = !config.disableScrubbing;
     this.debug = Boolean(config.debug);
     this.onError = config.onError;
@@ -57,7 +77,7 @@ export class HeronSignalClient {
         (globalThis as { fetch: FetchLike }).fetch(url, init));
 
     const interval = config.flushIntervalMs ?? 2000;
-    this.timer = setInterval(() => void this.flush(), interval);
+    this.timer = setInterval(() => this.timerFlush(), interval);
     // Don't keep the process alive just for the flush timer.
     this.timer.unref?.();
   }
@@ -68,7 +88,10 @@ export class HeronSignalClient {
     attributes?: Record<string, unknown>,
     correlation?: Correlation,
   ): void {
-    this.enqueue({ type: "event", name, attributes }, correlation);
+    this.enqueue(
+      { type: "event", name: truncate(name, MAX_NAME_LENGTH), attributes },
+      correlation,
+    );
   }
 
   /** Record a diagnostic log line. */
@@ -78,7 +101,15 @@ export class HeronSignalClient {
     attributes?: Record<string, unknown>,
     correlation?: Correlation,
   ): void {
-    this.enqueue({ type: "log", level, message, attributes }, correlation);
+    this.enqueue(
+      {
+        type: "log",
+        level,
+        message: truncate(message, MAX_MESSAGE_LENGTH),
+        attributes,
+      },
+      correlation,
+    );
   }
 
   /** Record a handled exception. Accepts an Error or anything thrown. */
@@ -92,9 +123,11 @@ export class HeronSignalClient {
       {
         type: "exception",
         level: "error",
-        name: normalized.name,
-        message: normalized.message,
-        stack: normalized.stack,
+        name: truncate(normalized.name, MAX_NAME_LENGTH),
+        message: truncate(normalized.message, MAX_MESSAGE_LENGTH),
+        stack: normalized.stack
+          ? truncate(normalized.stack, MAX_STACK_LENGTH)
+          : undefined,
         attributes,
       },
       correlation,
@@ -112,21 +145,18 @@ export class HeronSignalClient {
     this.enqueue({ type: "request", level, http, attributes }, correlation);
   }
 
-  /** Send everything queued right now. Safe to call anytime. */
-  async flush(): Promise<void> {
-    if (this.flushing || this.queue.length === 0) {
-      return;
+  /**
+   * Send everything queued right now. Safe to call anytime; concurrent calls
+   * share the same in-flight drain, so awaiting flush() during another flush
+   * still waits until the queue has actually been drained.
+   */
+  flush(): Promise<void> {
+    if (!this.inFlight) {
+      this.inFlight = this.drain().finally(() => {
+        this.inFlight = null;
+      });
     }
-
-    this.flushing = true;
-    try {
-      while (this.queue.length > 0) {
-        const chunk = this.queue.splice(0, HARD_BATCH_CAP);
-        await this.send(chunk);
-      }
-    } finally {
-      this.flushing = false;
-    }
+    return this.inFlight;
   }
 
   /** Flush and stop the background timer. Call this in your shutdown handler. */
@@ -137,6 +167,18 @@ export class HeronSignalClient {
       this.timer = undefined;
     }
     await this.flush();
+    // A flush that was already in-flight when we were called may have finished
+    // its final queue check before the last events were enqueued — drain again.
+    if (this.queue.length > 0) {
+      await this.flush();
+    }
+  }
+
+  private timerFlush(): void {
+    if (Date.now() < this.backoffUntil) {
+      return;
+    }
+    void this.flush();
   }
 
   private enqueue(
@@ -147,7 +189,7 @@ export class HeronSignalClient {
       return;
     }
 
-    const event: WireEvent = {
+    const wire: WireEvent = {
       ...partial,
       ...spreadCorrelation(correlation),
       attributes:
@@ -157,7 +199,7 @@ export class HeronSignalClient {
       occurredAt: new Date().toISOString(),
     };
 
-    this.queue.push(event);
+    this.queue.push({ wire, attempts: 0 });
 
     if (this.queue.length > this.maxQueueSize) {
       // Drop the oldest to bound memory; monitoring must never OOM the app.
@@ -167,12 +209,59 @@ export class HeronSignalClient {
       }
     }
 
-    if (this.queue.length >= this.maxBatchSize) {
+    if (this.queue.length >= this.maxBatchSize && Date.now() >= this.backoffUntil) {
       void this.flush();
     }
   }
 
-  private async send(events: WireEvent[]): Promise<void> {
+  private async drain(): Promise<void> {
+    while (this.queue.length > 0) {
+      const chunk = this.queue.splice(0, this.maxBatchSize);
+      const outcome = await this.send(chunk.map((item) => item.wire));
+
+      if (outcome === "ok") {
+        this.consecutiveFailures = 0;
+        this.backoffUntil = 0;
+        continue;
+      }
+
+      if (outcome === "retry") {
+        this.consecutiveFailures += 1;
+        this.backoffUntil =
+          Date.now() +
+          Math.min(
+            this.retryBackoffMs * 2 ** (this.consecutiveFailures - 1),
+            MAX_BACKOFF_MS,
+          );
+
+        // Re-queue events that still have retry budget; the normal
+        // drop-oldest bound applies, so retries can never grow the queue.
+        const retriable = chunk
+          .map((item) => ({ wire: item.wire, attempts: item.attempts + 1 }))
+          .filter((item) => item.attempts <= this.maxRetries);
+
+        const exhausted = chunk.length - retriable.length;
+        if (exhausted > 0) {
+          this.reportError(
+            new Error(
+              `HeronSignal: dropping ${exhausted} event(s) after ${this.maxRetries} retries`,
+            ),
+          );
+        }
+
+        this.queue.push(...retriable);
+        if (this.queue.length > this.maxQueueSize) {
+          this.queue.splice(0, this.queue.length - this.maxQueueSize);
+        }
+      }
+
+      // "retry" waits for backoff; "drop" already reported. Either way, stop
+      // draining — the next flush picks the queue back up.
+      return;
+    }
+  }
+
+  private async send(events: WireEvent[]): Promise<SendOutcome> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
 
@@ -192,15 +281,25 @@ export class HeronSignalClient {
         signal: controller.signal,
       });
 
-      if (!response.ok) {
-        this.reportError(
-          new Error(`HeronSignal ingest returned ${response.status}`),
-        );
-      } else if (this.debug) {
-        console.log(`[heronsignal] sent ${events.length} event(s)`);
+      if (response.ok) {
+        if (this.debug) {
+          console.log(`[heronsignal] sent ${events.length} event(s)`);
+        }
+        return "ok";
       }
+
+      this.reportError(
+        new Error(`HeronSignal ingest returned ${response.status}`),
+      );
+
+      // 429 and 5xx are transient; other 4xx means the batch itself was
+      // rejected and must not become a poison loop.
+      return response.status === 429 || response.status >= 500
+        ? "retry"
+        : "drop";
     } catch (error) {
       this.reportError(error);
+      return "retry";
     } finally {
       clearTimeout(timeout);
     }
@@ -217,6 +316,37 @@ export class HeronSignalClient {
       console.warn("[heronsignal] failed to send events:", error);
     }
   }
+}
+
+function assertSafeEndpoint(base: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(base);
+  } catch {
+    throw new Error(`HeronSignal: \`endpoint\` is not a valid URL: ${base}`);
+  }
+
+  if (parsed.protocol === "https:") {
+    return;
+  }
+
+  const loopback =
+    parsed.hostname === "localhost" ||
+    parsed.hostname === "127.0.0.1" ||
+    parsed.hostname === "[::1]" ||
+    parsed.hostname.endsWith(".localhost");
+
+  if (parsed.protocol === "http:" && loopback) {
+    return;
+  }
+
+  throw new Error(
+    `HeronSignal: \`endpoint\` must use https:// (http:// is allowed for localhost only): ${base}`,
+  );
+}
+
+function truncate(value: string, maxLength: number): string {
+  return value.length > maxLength ? value.slice(0, maxLength) : value;
 }
 
 function spreadCorrelation(
