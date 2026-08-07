@@ -22,7 +22,7 @@ export interface ExpressOptions {
   client: HeronSignalClient;
   /**
    * Derive correlation (userId / sessionId / business entity) from the request,
-   * e.g. `(req) => ({ userId: req.user?.id, sessionId: req.headers["x-hs-session"] })`.
+   * e.g. `(req) => ({ userId: req.user?.id, sessionId: req.headers["x-heronsignal-session"] })`.
    */
   correlate?: (request: unknown) => Correlation | undefined;
   /** Capture every request, not just 5xx responses. Default false. */

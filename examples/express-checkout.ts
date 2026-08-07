@@ -29,7 +29,7 @@ const correlate = (request: unknown) => {
     .headers;
   return {
     userId: headers["x-user-id"],
-    sessionId: headers["x-hs-session"],
+    sessionId: headers["x-heronsignal-session"],
   };
 };
 

@@ -7,7 +7,7 @@
  *
  * HeronSignal assigns that visit a session. Forward the **session id** (and your
  * app's user id) to the backend on the checkout request, e.g. as an
- * `x-hs-session` header, so the server-side events line up with the exact
+ * `x-heronsignal-session` header, so the server-side events line up with the exact
  * browser journey and COMPLETE the funnel, and any server error is tied to the
  * session that hit it.
  *
@@ -26,7 +26,7 @@ init({
 
 interface PaymentRequest {
   userId: string;
-  /** The browser session id, forwarded from the frontend (e.g. x-hs-session). */
+  /** The browser session id, forwarded from the frontend (e.g. x-heronsignal-session). */
   sessionId: string;
   orderId: string;
   amountCents: number;

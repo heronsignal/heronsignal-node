@@ -66,7 +66,7 @@ app.use(
     client,
     correlate: (req: any) => ({
       userId: req.user?.id,
-      sessionId: req.headers["x-hs-session"],
+      sessionId: req.headers["x-heronsignal-session"],
     }),
   }),
 );
@@ -97,7 +97,7 @@ heronsignal.event("checkout_started", { plan: "pro" });
 ```
 
 Forward the HeronSignal **session id** (and your user id) to the backend on the
-checkout request (e.g. an `x-hs-session` header), then reuse one correlation
+checkout request (e.g. an `x-heronsignal-session` header), then reuse one correlation
 object so the server events line up with that exact visit and **complete the
 funnel**, and any error is tied to the session that hit it:
 
