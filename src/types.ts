@@ -21,7 +21,7 @@ export interface HttpInfo {
   durationMs?: number;
 }
 
-/** Minimal shape of the response we need — avoids depending on DOM/undici types. */
+/** Minimal shape of the response we need, avoiding a dependency on DOM or undici types. */
 export interface FetchResponseLike {
   ok: boolean;
   status: number;

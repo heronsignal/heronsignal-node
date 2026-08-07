@@ -1,7 +1,7 @@
 # @heronsignal/node
 
 Server-side SDK for [HeronSignal](https://heronsignal.com). Capture backend
-**errors**, **logs**, and **business events** — correlated to the real user
+**errors**, **logs**, and **business events**, correlated to the real user
 session that triggered them, so a server error or a server-confirmed conversion
 lines up with the browser journey and your funnels.
 
@@ -33,7 +33,7 @@ init({
   release: process.env.GIT_SHA,
 });
 
-// A business milestone — powers funnels & metrics. Correlate it to the user so
+// A business milestone. Powers funnels and metrics. Correlate it to the user so
 // it can complete a funnel that started in the browser.
 event("order_paid", { amount: 4200, currency: "usd" }, {
   userId: "user_123",
@@ -73,7 +73,7 @@ app.use(
 
 // ... your routes ...
 
-// Captures thrown errors — mount last.
+// Captures thrown errors. Mount last.
 app.use(heronExpressErrorHandler({ client }));
 ```
 
@@ -83,7 +83,7 @@ The whole point is tying backend telemetry to the visitor. Attach any of:
 
 | Field | Use |
 | --- | --- |
-| `userId` | Your application user id — the most durable link. |
+| `userId` | Your application user id, the most durable link. |
 | `entity` | A business object, e.g. `{ type: "order", id: "ord_789" }`. Use the same key you tracked in the browser to **complete a funnel server-side**. |
 | `sessionId` | The browser session id (only valid while the session is live). |
 | `trace` | `{ traceId, spanId }` for operation-level correlation. |
@@ -97,7 +97,7 @@ heronsignal.event("checkout_started", { plan: "pro" });
 ```
 
 Forward the HeronSignal **session id** (and your user id) to the backend on the
-checkout request — e.g. an `x-hs-session` header — then reuse one correlation
+checkout request (e.g. an `x-hs-session` header), then reuse one correlation
 object so the server events line up with that exact visit and **complete the
 funnel**, and any error is tied to the session that hit it:
 
@@ -124,7 +124,7 @@ and an Express route in [`examples/express-checkout.ts`](./examples/express-chec
 
 ```ts
 init({
-  token: "…",              // required — server ingest token
+  token: "…",              // required: server ingest token
   endpoint: "https://api.heronsignal.com", // default
   service: "checkout-api",
   environment: "production", // default: process.env.NODE_ENV
@@ -156,6 +156,86 @@ init({
 - `flush()` calls made while another flush is in flight await the same drain,
   so `shutdown()` never resolves while events are still queued.
 
+## Next.js
+
+Works in Route Handlers, Server Actions and Server Components. Initialise once
+from `instrumentation.ts`, which is the only Next hook that runs per server
+boot:
+
+```ts
+// instrumentation.ts
+export async function register() {
+  if (process.env.NEXT_RUNTIME !== "nodejs") return;
+
+  const { init } = await import("@heronsignal/node");
+
+  init({
+    token: process.env.HERONSIGNAL_SERVER_TOKEN!,
+    service: "web-app",
+    // Serverless: no background timer, flush explicitly instead. See below.
+    flushIntervalMs: process.env.VERCEL ? 0 : 2000,
+  });
+}
+```
+
+Next 15 also gives you one hook that catches errors from Server Components,
+Route Handlers and Server Actions together:
+
+```ts
+// instrumentation.ts
+export async function onRequestError(error: unknown, request: unknown) {
+  const { captureError, flush } = await import("@heronsignal/node");
+
+  captureError(error, { path: (request as { path?: string })?.path });
+  await flush();
+}
+```
+
+**Edge runtime is not supported yet.** Keep the `NEXT_RUNTIME` guard above, and
+do not initialise from `middleware.ts`.
+
+## Flushing, and why serverless is different
+
+The client batches in the background every 2 seconds and flushes on
+`beforeExit`. Both assume a process that stays alive.
+
+On Vercel, Cloud Run, Lambda or any serverless host, **the function freezes the
+instant the response is returned.** A timer scheduled for later never fires, and
+`beforeExit` never runs, so anything queued in the last couple of seconds is
+lost with no error. Flush before you return:
+
+```ts
+// Next 15 and later: runs after the response has streamed, without blocking it
+import { after } from "next/server";
+import { event, flush } from "@heronsignal/node";
+
+export async function POST() {
+  event("order_paid", { amountCents: 4200 });
+  after(() => flush());
+
+  return Response.json({ ok: true });
+}
+```
+
+```ts
+// Next 14 on Vercel
+import { waitUntil } from "@vercel/functions";
+
+waitUntil(flush());
+```
+
+```ts
+// Anywhere else: pay the latency
+await flush();
+```
+
+`flush()` resolves only once the batch has actually gone, so awaiting it is
+safe even when a background flush is already running.
+
+**Never call `shutdown()` in a request handler.** It closes the client
+permanently, so on a warm container the first invocation reports and every one
+after it silently drops everything. `shutdown()` is for process exit only.
+
 ## Graceful shutdown
 
 `init()` flushes best-effort on `beforeExit`. For hard signals, flush explicitly:
@@ -169,12 +249,12 @@ process.on("SIGTERM", async () => {
 
 ## API
 
-- `init(config)` → `HeronSignalClient` — configure the default client.
-- `event(name, attributes?, correlation?)` — business milestone.
-- `log(level, message, attributes?, correlation?)` — `"error" | "warn" | "info"`.
-- `captureError(error, attributes?, correlation?)` — handled exception.
-- `captureHttp(http, correlation?, attributes?)` — record a request manually.
-- `flush()` / `shutdown()` — send now / send and stop.
+- `init(config)` returns a `HeronSignalClient`: configure the default client.
+- `event(name, attributes?, correlation?)`: business milestone.
+- `log(level, message, attributes?, correlation?)`: `"error" | "warn" | "info"`.
+- `captureError(error, attributes?, correlation?)`: handled exception.
+- `captureHttp(http, correlation?, attributes?)`: record a request manually.
+- `flush()` / `shutdown()`: send now / send and stop.
 - `heronExpressMiddleware(opts)` / `heronExpressErrorHandler(opts)`.
 
 You can also create isolated clients directly: `new HeronSignalClient(config)`.

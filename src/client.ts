@@ -50,6 +50,7 @@ export class HeronSignalClient {
   private consecutiveFailures = 0;
   private backoffUntil = 0;
   private closed = false;
+  private warnedClosed = false;
 
   constructor(config: HeronSignalConfig) {
     if (!config.token) {
@@ -62,7 +63,9 @@ export class HeronSignalClient {
     this.token = config.token;
     this.url = `${base}/server-events`;
     this.service = config.service;
-    this.environment = config.environment ?? process.env.NODE_ENV;
+    // `process` is absent on Edge and Workers runtimes, where reading it
+    // unguarded throws at construction and takes the request down with it.
+    this.environment = config.environment ?? readNodeEnv();
     this.release = config.release;
     this.maxBatchSize = Math.min(config.maxBatchSize ?? 50, HARD_BATCH_CAP);
     this.maxQueueSize = config.maxQueueSize ?? 1000;
@@ -76,10 +79,16 @@ export class HeronSignalClient {
       ((url, init) =>
         (globalThis as { fetch: FetchLike }).fetch(url, init));
 
+    // 0 or less means "no background timer, I will flush explicitly". That is
+    // the correct setting on a serverless host, where the function freezes the
+    // moment the response returns and a timer scheduled for later never fires.
     const interval = config.flushIntervalMs ?? 2000;
-    this.timer = setInterval(() => this.timerFlush(), interval);
-    // Don't keep the process alive just for the flush timer.
-    this.timer.unref?.();
+
+    if (interval > 0) {
+      this.timer = setInterval(() => this.timerFlush(), interval);
+      // Don't keep the process alive just for the flush timer.
+      this.timer.unref?.();
+    }
   }
 
   /** Record a business milestone (e.g. "order_paid"). Powers funnels & metrics. */
@@ -159,7 +168,14 @@ export class HeronSignalClient {
     return this.inFlight;
   }
 
-  /** Flush and stop the background timer. Call this in your shutdown handler. */
+  /**
+   * Flush and stop the background timer, permanently. Call this from a process
+   * shutdown handler ONLY.
+   *
+   * Never call it in a request handler. It closes the client for good, and on a
+   * warm serverless container that means the first invocation reports and every
+   * one after it silently drops. Use `flush()` there instead.
+   */
   async shutdown(): Promise<void> {
     this.closed = true;
     if (this.timer) {
@@ -168,7 +184,7 @@ export class HeronSignalClient {
     }
     await this.flush();
     // A flush that was already in-flight when we were called may have finished
-    // its final queue check before the last events were enqueued — drain again.
+    // its final queue check before the last events were enqueued, so drain again.
     if (this.queue.length > 0) {
       await this.flush();
     }
@@ -186,6 +202,18 @@ export class HeronSignalClient {
     correlation?: Correlation,
   ): void {
     if (this.closed) {
+      // Say it once. Dropping events after shutdown is correct, but a caller
+      // who put shutdown() in a request handler is now losing everything and
+      // has nothing at all to tell them so.
+      if (!this.warnedClosed) {
+        this.warnedClosed = true;
+        console.warn(
+          "[heronsignal] client is shut down, dropping events. " +
+            "shutdown() closes the client permanently: use flush() to send " +
+            "before a serverless response returns.",
+        );
+      }
+
       return;
     }
 
@@ -205,7 +233,7 @@ export class HeronSignalClient {
       // Drop the oldest to bound memory; monitoring must never OOM the app.
       this.queue.splice(0, this.queue.length - this.maxQueueSize);
       if (this.debug) {
-        console.warn("[heronsignal] queue full — dropping oldest events");
+        console.warn("[heronsignal] queue full, dropping oldest events");
       }
     }
 
@@ -256,7 +284,7 @@ export class HeronSignalClient {
       }
 
       // "retry" waits for backoff; "drop" already reported. Either way, stop
-      // draining — the next flush picks the queue back up.
+      // draining. The next flush picks the queue back up.
       return;
     }
   }
@@ -386,4 +414,11 @@ function normalizeError(error: unknown): {
   } catch {
     return { name: "Error", message: String(error) };
   }
+}
+
+// `process` is not defined on the Edge runtime or in Cloudflare Workers, and
+// Next's Edge shim provides only part of it. Reading it defensively keeps the
+// SDK runtime-agnostic, which is the whole reason it uses globalThis.fetch.
+function readNodeEnv(): string | undefined {
+  return typeof process !== "undefined" ? process.env?.NODE_ENV : undefined;
 }

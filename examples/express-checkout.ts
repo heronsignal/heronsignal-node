@@ -55,7 +55,7 @@ app.post("/checkout", async (request, response) => {
   }
 });
 
-// Captures thrown errors — mount last.
+// Captures thrown errors. Mount last.
 app.use(heronExpressErrorHandler({ client }));
 
 app.listen(3000, () => console.log("checkout-api on :3000"));

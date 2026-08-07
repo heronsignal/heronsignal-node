@@ -1,13 +1,13 @@
 /**
- * Payment journey — the correlation story end to end.
+ * Payment journey: the correlation story end to end.
  *
  * The funnel STARTS in the browser (with @heronsignal/web):
  *
  *     heronsignal.event("checkout_started", { plan: "pro" });
  *
  * HeronSignal assigns that visit a session. Forward the **session id** (and your
- * app's user id) to the backend on the checkout request — e.g. as an
- * `x-hs-session` header — so the server-side events line up with the exact
+ * app's user id) to the backend on the checkout request, e.g. as an
+ * `x-hs-session` header, so the server-side events line up with the exact
  * browser journey and COMPLETE the funnel, and any server error is tied to the
  * session that hit it.
  *
@@ -54,7 +54,7 @@ async function handlePayment(input: PaymentRequest): Promise<void> {
   try {
     await chargeCard(input); // your payment provider call
 
-    // Conversion milestone — completes the funnel that started in the browser.
+    // Conversion milestone: completes the funnel that started in the browser.
     event(
       "order_paid",
       { amountCents: input.amountCents, currency: input.currency },
@@ -62,7 +62,7 @@ async function handlePayment(input: PaymentRequest): Promise<void> {
     );
     log("info", "Payment succeeded", { orderId: input.orderId }, who);
   } catch (error) {
-    // Capture the error AND a business event — both correlated to the session,
+    // Capture the error AND a business event, both correlated to the session,
     // so the drop-off in the funnel has an error you can click straight into.
     captureError(error, { orderId: input.orderId, step: "charge" }, who);
     event(
@@ -88,9 +88,11 @@ async function main(): Promise<void> {
     // handled above; swallow so the demo exits cleanly
   }
 
-  // Flush and stop before the process exits (a short-lived script or a
-  // serverless handler should always flush; a long-lived server can rely on
-  // background batching and only shutdown() on SIGTERM).
+  // This is a script that is about to exit, so shutting down is right here.
+  //
+  // A serverless handler must NOT do this. shutdown() closes the client
+  // permanently, so on a warm container the first invocation would report and
+  // every one after it would silently drop. Use `await flush()` there.
   await shutdown();
 }
 
