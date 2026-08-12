@@ -14,6 +14,10 @@ on:
   push:
     tags:
       - "v*"
+  # Also runnable by hand. A tag only fires the push trigger the first time it
+  # reaches the remote, so once v0.2.0 was pushed there was no way to retry the
+  # release without deleting and recreating the tag. This avoids that.
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -31,7 +35,11 @@ jobs:
           node-version: 20
           registry-url: https://registry.npmjs.org
 
+      # Only meaningful for a tag run. On a manual dispatch GITHUB_REF_NAME is a
+      # branch, so comparing it to the version would fail every time; the
+      # already-on-npm guard below is what protects a manual run.
       - name: Refuse to publish if the tag and package.json disagree
+        if: github.ref_type == 'tag'
         run: |
           tag="${GITHUB_REF_NAME#v}"
           pkg="$(node -p "require('./package.json').version")"
