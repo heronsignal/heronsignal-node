@@ -86,7 +86,31 @@ The whole point is tying backend telemetry to the visitor. Attach any of:
 | `userId` | Your application user id, the most durable link. |
 | `entity` | A business object, e.g. `{ type: "order", id: "ord_789" }`. Use the same key you tracked in the browser to **complete a funnel server-side**. |
 | `sessionId` | The browser session id (only valid while the session is live). |
-| `trace` | `{ traceId, spanId }` for operation-level correlation. |
+| `trace` | `{ traceId, spanId }` for operation-level correlation. Read from the request's `traceparent` header on its own by the Express adapter; see below. |
+
+## Request-level correlation
+
+With network tracking on, the HeronSignal browser tracker adds a W3C
+`traceparent` header to the page's own requests (and to the origins listed in
+its `tracePropagationTargets`). The Express middleware and error handler read
+it and attach the trace id to what they capture, so a failed request in a
+session journey opens the backend request and exception that served it. No
+configuration on this side.
+
+Capturing an error yourself inside a handler? Pass the trace along:
+
+```ts
+import { captureError, readTraceContext } from "@heronsignal/node";
+
+app.post("/checkout", async (req, res) => {
+  try {
+    await charge(req.body);
+  } catch (error) {
+    captureError(error, { step: "charge" }, { trace: readTraceContext(req.headers) });
+    throw error;
+  }
+});
+```
 
 ## Example: a payment journey
 

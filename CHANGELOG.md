@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 (2026-09-17)
+
+### Added
+
+- **Request-level correlation over `traceparent`.** The Express middleware
+  and error handler read the W3C `traceparent` header the HeronSignal browser
+  tracker (and any OpenTelemetry client) puts on a request, and attach its
+  trace id to the request event and to any error captured for it. The
+  dashboard joins a failed browser request to the backend request that
+  served it by that id. Nothing to configure; a `trace` returned by your own
+  `correlate` still wins. `readTraceContext(headers)` is exported for
+  handlers that capture errors themselves.
+
 ## 0.2.0 (2026-08-13)
 
 Everything below has been sitting on `main` since 0.1.2 went out on 4 July.

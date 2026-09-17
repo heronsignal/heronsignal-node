@@ -122,6 +122,7 @@ export function shutdown(): Promise<void> {
 }
 
 export { HeronSignalClient } from "./client";
+export { readTraceContext } from "./trace-context";
 export {
   heronExpressMiddleware,
   heronExpressErrorHandler,

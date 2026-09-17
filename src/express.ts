@@ -1,4 +1,5 @@
 import type { HeronSignalClient } from "./client";
+import { readTraceContext } from "./trace-context";
 import type { Correlation, HttpInfo } from "./types";
 
 // Structural subset of what we read off the Express request/response, so this
@@ -9,6 +10,7 @@ interface RequestLike {
   originalUrl?: string;
   baseUrl?: string;
   route?: { path?: string };
+  headers?: Record<string, string | string[] | undefined>;
 }
 
 interface ResponseLike {
@@ -23,6 +25,8 @@ export interface ExpressOptions {
   /**
    * Derive correlation (userId / sessionId / business entity) from the request,
    * e.g. `(req) => ({ userId: req.user?.id, sessionId: req.headers["x-heronsignal-session"] })`.
+   * The request's `traceparent` header is read on its own; return `trace`
+   * here only to override it.
    */
   correlate?: (request: unknown) => Correlation | undefined;
   /** Capture every request, not just 5xx responses. Default false. */
@@ -55,7 +59,7 @@ export function heronExpressMiddleware(options: ExpressOptions) {
         durationMs: Date.now() - startedAt,
       };
 
-      client.captureHttp(http, correlate?.(request));
+      client.captureHttp(http, withTrace(request, correlate?.(request)));
     });
 
     next();
@@ -78,10 +82,24 @@ export function heronExpressErrorHandler(options: ExpressOptions) {
     client.captureError(
       error,
       { route: routeOf(request), method: request.method },
-      correlate?.(request),
+      withTrace(request, correlate?.(request)),
     );
     next(error);
   };
+}
+
+// The request's own trace, unless the app's correlate already named one.
+function withTrace(
+  request: RequestLike,
+  correlation: Correlation | undefined,
+): Correlation | undefined {
+  if (correlation?.trace) {
+    return correlation;
+  }
+
+  const trace = readTraceContext(request.headers);
+
+  return trace ? { ...correlation, trace } : correlation;
 }
 
 function routeOf(request: RequestLike): string | undefined {
