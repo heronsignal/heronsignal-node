@@ -164,6 +164,26 @@ init({
 });
 ```
 
+## Deploy markers
+
+Set `release` in `init` (a git sha or a version string). The first event
+carrying a value HeronSignal has not seen records a deploy for that
+workspace, environment and service, and every chart in the dashboard draws
+a dashed line there, labelled with the release. Nothing else to set up.
+
+For the exact minute or a note, a pipeline can post the deploy with the same
+server token:
+
+```bash
+curl -X POST https://api.heronsignal.com/deploys \\
+  -H "Authorization: Bearer $HERONSIGNAL_SERVER_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"release":"v1.4.2","environment":"production","service":"checkout-api"}'
+```
+
+Posting the same release again updates its time and note rather than adding
+a second marker.
+
 ## Security & delivery behavior
 
 - `endpoint` must be an `https://` URL (`http://` is accepted for `localhost`
